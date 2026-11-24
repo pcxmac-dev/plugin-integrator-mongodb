@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "plugin-integrator-mongodb"
-version = "0.1.0"  # the plugin's own release (CHANGELOG.md); the app shows it on the Plugins view
+version = "0.1.1"  # the plugin's own release (CHANGELOG.md); the app shows it on the Plugins view
 description = "MongoDB for Liminal: the server the app runs on this machine as an instance of its own, its port its own setting, with databases on other servers beside it."
 readme = "README.md"
 requires-python = ">=3.10"

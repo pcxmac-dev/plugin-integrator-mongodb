@@ -19,4 +19,4 @@ def test_every_plugin_here_conforms_to_the_class_contract():
     assert p.apis and p.interface()["apis"] == [a.name for a in p.apis]  # what it attaches to (2.2)
     assert set(p.interface()["hooks"]) >= {"builtin", "open", "probe", "make"}
     assert f"    {p.ICON}: '" in (STATIC / "icons.js").read_text(encoding="utf-8")
-    assert module.__version__ == "0.1.0" and [q.name for q in _plugins_in(module, "test")] == ["mongodb"]
+    assert module.__version__ == "0.1.1" and [q.name for q in _plugins_in(module, "test")] == ["mongodb"]

@@ -36,6 +36,9 @@ class FakeCollection:
 
     def insert_one(self, doc):
         self.db.client.may(self.db.name)
+        if self.db.client.server().get("insert_fails"):
+            self.db.client.server()["insert_fails"] -= 1
+            raise ConnectionError("the server went away")
         self._docs().append(dict(doc))
 
     def find_one(self, query):
@@ -54,10 +57,21 @@ class FakeDb:
             return {"ok": 1}
         if name == "createUser":
             self.client.may("admin")  # the server's keeper alone makes users
+            if value in server["users"].get(self.name, {}):
+                raise OperationFailure(f'User "{value}@{self.name}" already exists', 51003)
             server["users"].setdefault(self.name, {})[value] = more["pwd"]
             server["made"].append((self.name, value, more["roles"]))
             return {"ok": 1}
+        if name == "updateUser":
+            self.client.may("admin")
+            if value not in server["users"].get(self.name, {}):
+                raise OperationFailure(f"Could not find user \"{value}\" for db \"{self.name}\"", 11)
+            server["users"][self.name][value] = more["pwd"]
+            server["updated"].append((self.name, value, more["roles"]))
+            return {"ok": 1}
         if name == "dropUser":
+            if server.get("drop_fails"):
+                raise ConnectionError("the server went away")
             self.client.may("admin")
             server["users"].get(self.name, {}).pop(value, None)
             server["dropped"].append((self.name, value))
@@ -124,7 +138,7 @@ class FakeClient:
 
 
 def server(**more) -> dict:
-    return {"version": "9.0.4", "users": {}, "dbs": {}, "made": [], "dropped": [], **more}
+    return {"version": "9.0.4", "users": {}, "dbs": {}, "made": [], "updated": [], "dropped": [], **more}
 
 
 @pytest.fixture
@@ -332,6 +346,32 @@ def test_a_new_database_gets_a_role_of_its_own_where_the_server_signs_in(mongos)
         plugin.new_database("third", "127.0.0.1:27020", admin_user="root", admin_password="nope")
     assert "third" not in guarded["dbs"] and "third" not in env["MONGODB_INSTANCES"]
     assert [i.name for i in plugin.instances()] == ["local", "notes", "filings-2026"]
+
+
+def test_a_make_whose_marker_was_not_written_is_undone_and_its_retry_finishes(mongos):
+    """The review of 2026-11-21, item 26: the role was made, the marker's write failed, and every retry's createUser
+    then failed for good with the server's "User already exists"."""
+    plugin, servers, env = mongos
+    guarded = servers.at[("127.0.0.1", 27020)] = server(users={"admin": {"root": "admin-secret"}}, insert_fails=1)
+    given = {"admin_user": "root", "admin_password": "admin-secret"}
+    with pytest.raises(ConnectionError):
+        plugin.new_database("filings", "127.0.0.1:27020", **given)
+    assert guarded["dropped"] == [("filings", "liminal_filings")] and not guarded["users"].get("filings")
+    assert env == {} and [i.name for i in plugin.instances()] == ["local"]  # neither half a sign-in nor an instance
+    made = plugin.new_database("filings", "127.0.0.1:27020", **given)
+    assert made["ok"] and guarded["dbs"]["filings"][MARKER][0]["name"] == "filings"
+    assert guarded["users"]["filings"] == {"liminal_filings": env["MONGODB_FILINGS_PASSWORD"]}
+    # the undoing did not reach the server either: the retry finds the role and no database, and takes it over
+    guarded["insert_fails"], guarded["drop_fails"] = 1, True
+    with pytest.raises(ConnectionError):
+        plugin.new_database("notes", "127.0.0.1:27020", **given)
+    assert "liminal_notes" in guarded["users"]["notes"] and "MONGODB_NOTES_PASSWORD" not in env
+    guarded["drop_fails"] = False
+    made = plugin.new_database("notes", "127.0.0.1:27020", **given)
+    assert made["ok"] and made["lines"][1].startswith("the role liminal_notes was there from a make that stopped half way")
+    assert guarded["updated"] == [("notes", "liminal_notes", [{"role": "readWrite", "db": "notes"}])]
+    assert guarded["users"]["notes"] == {"liminal_notes": env["MONGODB_NOTES_PASSWORD"]}
+    assert plugin.test("notes")["lines"][0] == "MongoDB 9.0.4 at 127.0.0.1:27020, signed in as liminal_notes"
 
 
 def test_a_role_whose_password_could_not_be_kept_is_taken_back(mongos):

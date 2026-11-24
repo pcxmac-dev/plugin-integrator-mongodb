@@ -31,13 +31,14 @@ from liminal_libs.storage.databases import DatabasePlugin, Instance, Made, Refus
 
 from .apis import APIS, MONGODB
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 LOCAL = "local"  # its own instance: the server here
 MARKER = "liminal_instance"  # the collection a database made here says what it is in
 PORT_VAR = "LIMINAL_MONGO_PORT"  # where the server here's port is kept: what liminal-libs' mongo.py reads
 ROLE = "readWrite"  # what the role made with a new database may do, on that database alone
 TIMEOUT_MS = 2000
 REFUSED_SIGN_IN = 18  # the server's code for a sign-in it refuses (AuthenticationFailed)
+USER_EXISTS = 51003  # the server's code for a createUser whose user is there already ("User ... already exists")
 
 
 def mongo_client(host: str, port: int, timeout_ms: int = TIMEOUT_MS, **more):
@@ -199,7 +200,19 @@ class MongodbPlugin(DatabasePlugin):
             db = admin[name]
             if admin_user:  # a server that signs in: a role of its own, for this database alone
                 role, password = f"liminal_{instance.name.replace('-', '_')}", new_password()
-                db.command("createUser", role, pwd=password, roles=[{"role": ROLE, "db": name}])
+                roles = [{"role": ROLE, "db": name}]
+                try:
+                    db.command("createUser", role, pwd=password, roles=roles)
+                except Exception as e:  # noqa: BLE001 - only the role of a try that stopped half way is taken over
+                    if getattr(e, "code", None) != USER_EXISTS and "already exists" not in str(e):
+                        raise
+                    # The role of an earlier make whose database was never written (it is not there: see above) and
+                    # whose undoing did not reach the server either: this make finishes it, with a password of its
+                    # own and this database's grant alone, rather than failing for good with the server's "User
+                    # already exists" (the review of 2026-11-21, item 26).
+                    db.command("updateUser", role, pwd=password, roles=roles)
+                    lines.append(f"the role {role} was there from a make that stopped half way: taken over, its "
+                                 "password renewed")
                 try:
                     self.keep_credentials(instance.name, role, password)
                 except Exception:
@@ -207,8 +220,19 @@ class MongodbPlugin(DatabasePlugin):
                     raise
                 lines.append(f"the role {role} made for it ({ROLE} on {name} alone); its password kept through the login, "
                              "never shown")
-            db[MARKER].insert_one({"_id": "instance", "name": instance.name, "made": instance.at or now_iso(),
-                                   "holds": list(instance.holds), "by": f"plugin-integrator-mongodb {__version__}"})
+            try:
+                db[MARKER].insert_one({"_id": "instance", "name": instance.name, "made": instance.at or now_iso(),
+                                       "holds": list(instance.holds), "by": f"plugin-integrator-mongodb {__version__}"})
+            except Exception:
+                # No database without its marker, so nothing half made is left: the role and its kept sign-in are
+                # taken back (the review of 2026-11-21, item 26; a retry's createUser failed on the role left here).
+                if role:
+                    try:
+                        db.command("dropUser", role)
+                    except Exception:  # noqa: BLE001 - a server gone by now: the retry takes the role over (above)
+                        pass
+                    self._forget_credentials(instance.name)
+                raise
         finally:
             admin.close()
         first = f"the database {name} made on {host}:{port} (its {MARKER} collection says what it is)"

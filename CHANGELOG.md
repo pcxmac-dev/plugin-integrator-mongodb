@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.1.1 (2026-11-24)
+
+A make that stopped half way no longer fails for good (the review of 2026-11-21, item 26). On a server that signs
+in, `make` made the database's role, kept its password, then wrote the marker; when that write failed, the role and
+its kept sign-in were left behind, and every retry's `createUser` failed with the server's "User already exists".
+Now a failed marker write takes the role back (`dropUser`) and forgets its sign-in, and a retry that finds the role
+with no database (its undoing did not reach the server either) takes it over (`updateUser`: a new password, this
+database's grant alone) and finishes, saying so. Test: a marker write that fails, then its retry; then one whose
+undoing fails too, then its retry.
+
 ## 0.1.0 (2026-11-16)
 
 The first release: MongoDB as a database plugin (plugin API 2.3, liminal-libs 1.61.0; the user, 2026-11-15: "for the
