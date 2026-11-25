@@ -1,3 +1,5 @@
+> **Moved.** This plugin is now [plugin-platform-mongodb](https://github.com/pcxmac-dev/plugin-platform-mongodb) (0.2.0, the platform's Databases section). This repository is archived.
+
 # plugin-integrator-mongodb
 
 MongoDB for [Liminal](https://github.com/pcxmac-dev/liminal-charts): the server the app runs on this machine
